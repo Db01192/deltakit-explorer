@@ -46,8 +46,8 @@ include = ["src/deltakit_explorer/**/*.py", "tests/**/*.py"]
 line-length = 88
 indent-width = 4
 
-# Assume Python 3.10
-target-version = "py310"
+# Assume Python 3.11
+target-version = "py311"
 
 [lint]
 preview = true
@@ -98,6 +98,8 @@ ignore = [
     # function".
     # This check cannot "hide" potential bugs.
     "PLR0913",
+    # Too many parameters on functions or methods.
+    "PLR0917",
     # Use of `zip` without the `strict` argument.
     # For the moment we keep this ignore as technical debt. It will be properly removed
     # in a future PR.

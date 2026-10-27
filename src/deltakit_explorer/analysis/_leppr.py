@@ -114,9 +114,11 @@ class LogicalErrorProbabilityPerRoundData:
 
 
 def compute_logical_error_per_round(
-    num_rounds: npt.NDArray[np.int_] | Sequence[int],
-    logical_error_probabilities: npt.NDArray[np.floating] | Sequence[float],
-    logical_error_probabilities_stddev: npt.NDArray[np.floating] | Sequence[float],
+    num_rounds: npt.NDArray[np.int_] | Sequence[int] | int,
+    logical_error_probabilities: npt.NDArray[np.floating] | Sequence[float] | float,
+    logical_error_probabilities_stddev: (
+        npt.NDArray[np.floating] | Sequence[float] | float
+    ),
     *,
     force_include_single_round: bool = False,
 ) -> LogicalErrorProbabilityPerRoundData:
@@ -181,12 +183,15 @@ def compute_logical_error_per_round(
     """
     # Get the inputs as numpy arrays.
     # Sanitisation: also make sure that the inputs are sorted.
+    # Scalars (e.g. the floats returned by ``calculate_lep_and_lep_stddev`` for scalar
+    # inputs) are treated as length-1 arrays.
+    num_rounds = np.atleast_1d(num_rounds)
     isort = np.argsort(num_rounds)
-    num_rounds = np.asarray(num_rounds)[isort]
-    logical_error_probabilities = np.asarray(logical_error_probabilities)[isort]
-    logical_error_probabilities_stddev = np.asarray(logical_error_probabilities_stddev)[
-        isort
-    ]
+    num_rounds = num_rounds[isort]
+    logical_error_probabilities = np.atleast_1d(logical_error_probabilities)[isort]
+    logical_error_probabilities_stddev = np.atleast_1d(
+        logical_error_probabilities_stddev
+    )[isort]
 
     # Check that we do not have duplicate data for the same number of rounds as that
     # will confuse the numerical methods used in this function.
@@ -525,16 +530,22 @@ def fit_logical_error_per_round_asymmetric(
 def calculate_lep_and_lep_stddev(
     fails: npt.NDArray[np.int_] | Sequence[int] | int,
     shots: npt.NDArray[np.int_] | Sequence[int] | int,
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]] | tuple[float, float]:
     """Calculate the logical error probability (lep) and its standard deviation.
 
     Args:
-        fails: The number of logical failures.
-        shots: The number of shots the experiment was run for.
+        fails: The number of logical failures. A Python integer, a NumPy
+            integer scalar or a 0-d array all count as scalar input.
+        shots: The number of shots the experiment was run for. Scalars are
+            treated as for ``fails``.
 
     Returns:
         A tuple consisting of the logical error probability
-        and its standard deviation.
+        and its standard deviation. When both inputs are scalar the values
+        are returned as Python floats, so they can be used directly in
+        formatted strings. Otherwise both are returned as arrays, and a
+        scalar paired with an array is treated as a length-1 array, so
+        mismatched lengths still raise.
 
     Raises:
         ValueError: When inputs do not match lengths or have non-positive entries.
@@ -548,9 +559,18 @@ def calculate_lep_and_lep_stddev(
         ...     shots=[500000] * 3,
         ... )
 
+        Scalar inputs, including the NumPy integers found in simulation
+        results, return floats:
+
+        >>> lep, lep_stddev = analysis.calculate_lep_and_lep_stddev(
+        ...     fails=3778,
+        ...     shots=100000,
+        ... )
+
     """
-    fails = np.asarray([fails]) if isinstance(fails, int) else np.asarray(fails)
-    shots = np.asarray([shots]) if isinstance(shots, int) else np.asarray(shots)
+    scalar_inputs = np.ndim(fails) == 0 and np.ndim(shots) == 0
+    fails = np.atleast_1d(np.asarray(fails))
+    shots = np.atleast_1d(np.asarray(shots))
     if len(fails) != len(shots):
         msg = "Input data do not match lengths."
         raise ValueError(msg)
@@ -561,6 +581,8 @@ def calculate_lep_and_lep_stddev(
     # (see issue #134).
     lep = fails / shots
     lep_stddev = np.sqrt(lep * (1 - lep) / shots)
+    if scalar_inputs:
+        return lep.item(), lep_stddev.item()
     return lep, lep_stddev
 
 

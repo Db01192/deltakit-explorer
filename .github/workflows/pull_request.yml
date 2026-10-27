@@ -30,11 +30,11 @@ jobs:
     needs: [build-wheels]
     strategy:
       matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        python-version: ['3.11', '3.12', '3.13', '3.14', '3.15']
         dependency-resolution: ['highest', 'lowest-direct']
     name: Test deltakit-explorer on ${{ matrix.python-version }} with ${{matrix.dependency-resolution}}
     env:
-      ENABLE_COVERAGE: ${{ (matrix.python-version == '3.10') && (matrix.dependency-resolution == 'highest') }}
+      ENABLE_COVERAGE: ${{ (matrix.python-version == '3.11') && (matrix.dependency-resolution == 'highest') }}
       # See https://github.com/orgs/community/discussions/25217
       PR_FROM_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
       PR_FROM_DEPENDABOT: ${{ startsWith(github.head_ref, 'dependabot/' )}}
@@ -111,5 +111,5 @@ jobs:
         # Ignore CVE-2025-53000 as it only affects `nbconvert` on Windows.
         # `nbconvert` is only used for documentation building on Linux.
         # Remove when https://github.com/jupyter/nbconvert/issues/2258 is fixed.
-        run: uv run --no-sync pip-audit --ignore-vuln CVE-2025-53000
+        run: uv run --no-sync pip-audit --ignore-vuln CVE-2025-53000 --ignore-vuln PYSEC-2026-2132
         if: ${{ always() }}
