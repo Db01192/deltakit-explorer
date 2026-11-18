@@ -3,6 +3,7 @@ import logging
 from deltakit_explorer.analysis.threshold import ThresholdEstimator
 # Import the central dispatcher instead of the specific threshold plot
 from deltakit_explorer.plotting import plot
+from deltakit_explorer.plotting.plotting import ThresholdData
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -10,7 +11,9 @@ logger = logging.getLogger(__name__)
 def run_experiment() -> None:
     logger.info("Starting quantum simulations across multiple code distances...")
 
-    estimator = ThresholdEstimator()
+    # SI1000 crossings sit around p~0.004; above ~0.01 every distance saturates
+    # at LEP~0.5, so comparisons there are pure noise and mislead the bisection.
+    estimator = ThresholdEstimator(max_p=0.01)
     distance_pairs = [(3, 5), (5, 7), (7, 9)]
 
     logger.info("Running bisection searches and calculating asymptotic threshold...")
@@ -29,9 +32,11 @@ def run_experiment() -> None:
     logger.info("Generating threshold graph with the new asymptotic p_th...")
 
     fig, ax = plot(
-        result=estimator.get_search_history(),
-        estimated_threshold=p_th_final,
-        threshold_error=p_th_error
+        ThresholdData(
+            history_data=estimator.get_search_history(),
+            estimated_threshold=p_th_final,
+            threshold_error=p_th_error,
+        )
     )
 
     output_filename = "threshold_plot.png"

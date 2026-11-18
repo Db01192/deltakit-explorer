@@ -2,23 +2,19 @@
 
 from __future__ import annotations
 
-import concurrent.futures
 import logging
 import math
 
 import deltakit_stim  # type: ignore[import-untyped]
 import numpy as np
-import pymatching  # type: ignore[import-untyped]
 from deltakit_circuit.gates import PauliBasis
+from deltakit_decode._mwpm_decoder import PyMatchingDecoder
 from scipy.optimize import curve_fit
 
 from deltakit_explorer.codes import RotatedPlanarCode, css_code_memory_circuit
 from deltakit_explorer.enums import DecoderType
-from deltakit_explorer.qpu import QPU
-from deltakit_explorer.types import (
-    Decoder,
-    SI1000NoiseModel,
-)
+from deltakit_explorer.qpu import QPU, SI1000Noise
+from deltakit_explorer.types import Decoder
 from typing import Callable
 
 logger = logging.getLogger(__name__)
@@ -79,7 +75,7 @@ class ThresholdEstimator:
         precision: float = 0.0001,
         num_shots: int = 100_000,
         code_class: type = RotatedPlanarCode,
-        noise_model_class: type = SI1000NoiseModel,
+        noise_model_class: type = SI1000Noise,
         decoder: Decoder | None = None,
         experiment_builder: Callable | None = None,
     ):
@@ -123,22 +119,20 @@ class ThresholdEstimator:
         noise_model = self.noise_model_class(p=p_value)
 
         qpu = QPU(qubits=compiled_circuit.qubits, noise_model=noise_model)
-        noisy_circuit = qpu.compile_and_add_noise_to_circuit(
-            compiled_circuit
-        ).as_stim_circuit()
-
-        detectors, observables = noisy_circuit.compile_detector_sampler().sample(
-            shots=shots, separate_observables=True
-        )
-
-        error_model = noisy_circuit.detector_error_model(decompose_errors=True)
+        noisy_circuit = qpu.compile_and_add_noise_to_circuit(compiled_circuit)
 
         if self.decoder.decoder_type == DecoderType.MWPM:
-            matching = pymatching.Matching.from_detector_error_model(error_model)
-            predictions = matching.decode_batch(detectors)
+            matcher, stim_circuit = (
+                PyMatchingDecoder.construct_decoder_and_stim_circuit(noisy_circuit)
+            )
         else:
             msg = f"Local decoding for {self.decoder.decoder_type} is not yet implemented in this pipeline."
             raise NotImplementedError(msg)
+
+        detectors, observables = stim_circuit.compile_detector_sampler().sample(
+            shots=shots, separate_observables=True
+        )
+        predictions = matcher.decode_batch_to_logical_flip(detectors)
 
         logical_errors = int(np.sum(np.any(predictions != observables, axis=1)))
 
@@ -165,9 +159,10 @@ class ThresholdEstimator:
         while (current_max - current_min) > self.precision:
             mid_p: float = (current_min + current_max) / 2.0
             current_shots: int = self.num_shots
-            overlap: bool = True
 
-            while overlap:
+            # Re-simulate with more shots until the two distances' error bars
+            # no longer overlap, i.e. until we can tell which distance is worse.
+            while True:
                 lep_low = self.run_simulation(
                     mid_p, distance=d_low, shots=current_shots
                 )
@@ -180,23 +175,20 @@ class ThresholdEstimator:
                 gap = abs(lep_low - lep_high)
                 combined_error = error_low + error_high
 
-                if gap <= combined_error:
-                    current_shots = (
-                        math.ceil(
-                            current_shots * (combined_error / (SAFETY * gap)) ** 2
-                        )
-                        if gap > 0
-                        else current_shots * 10
-                    )
-                    # NEW SAFETY LIMIT TO PREVENT FREEZING:
-                    if current_shots > MAX_SHOTS:
-                        msg = (
-                            f"Could not obtain non-overlapping error bars "
-                            f"for p={mid_p:.6g} within {MAX_SHOTS} shots."
-                        )
-                        raise RuntimeError(msg)
+                if gap > combined_error:
+                    break
 
-                    overlap = False
+                if current_shots >= MAX_SHOTS:
+                    break
+
+                current_shots = min(
+                    MAX_SHOTS,
+                    math.ceil(
+                        current_shots * (combined_error / (SAFETY * gap)) ** 2
+                    )
+                    if gap > 0
+                    else current_shots * 10,
+                )
 
             if d_low not in self.history_data:
                 self.history_data[d_low] = {}
@@ -205,6 +197,18 @@ class ThresholdEstimator:
 
             self.history_data[d_low][mid_p] = (lep_low, current_shots)
             self.history_data[d_high][mid_p] = (lep_high, current_shots)
+            logger.info(
+                "d=(%d, %d) p=%.6g: lep=%.4g vs %.4g (%d shots)",
+                d_low, d_high, mid_p, lep_low, lep_high, current_shots,
+            )
+
+            if gap <= combined_error:
+                logger.warning(
+                    "d=(%d, %d): error bars still overlap at p=%.6g with %d shots; "
+                    "stopping search at bracket [%.6g, %.6g].",
+                    d_low, d_high, mid_p, current_shots, current_min, current_max,
+                )
+                break
 
             if lep_low > lep_high:
                 current_min = mid_p
@@ -216,7 +220,11 @@ class ThresholdEstimator:
         return (current_min + current_max) / 2.0
 
     def run_parallel_searches(self, distance_pairs: list[tuple[int, int]]) -> dict:
-        """Executes multiple bisection searches concurrently across different distance pairs.
+        """Executes bisection searches for each distance pair, one after another.
+
+        The searches run sequentially: the simulations are CPU-bound and hold the
+        GIL, so threads gave no speed-up, and concurrent first calls into the
+        deltakit_stim extension could deadlock.
 
         Args:
             distance_pairs: A list of tuples containing lower and upper code distances.
@@ -224,19 +232,10 @@ class ThresholdEstimator:
         Returns:
             A dictionary mapping each distance pair to its respective threshold estimate.
         """
-        results = {}
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = {
-                executor.submit(self.run_single_pair_search, d_low, d_high): (
-                    d_low,
-                    d_high,
-                )
-                for d_low, d_high in distance_pairs
-            }
-            for future in concurrent.futures.as_completed(futures):
-                pair = futures[future]
-                results[pair] = future.result()
-        return results
+        return {
+            (d_low, d_high): self.run_single_pair_search(d_low, d_high)
+            for d_low, d_high in distance_pairs
+        }
 
     def get_search_history(self) -> dict:
         """Formats the saved simulation data into structured arrays for matplotlib visualisation.
