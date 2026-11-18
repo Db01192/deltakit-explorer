@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
-from dataclasses import dataclass
+
 from deltakit_explorer.analysis import LambdaData
 from deltakit_explorer.analysis import LogicalErrorProbabilityPerRoundData as LEPPRData
 from deltakit_explorer.plotting._lambda import plot_lambda
@@ -13,12 +15,22 @@ from deltakit_explorer.plotting._leppr import plot_leppr
 from deltakit_explorer.plotting._threshold import plot_threshold
 from deltakit_explorer.plotting.results import interpolate_lambda, interpolate_leppr
 
+
 @dataclass
 class ThresholdData:
-    """Container for threshold estimation plotting data."""
+    """Container for threshold estimation plotting data.
+
+    Attributes:
+        history_data: Mapping from code distance to a tuple of
+            (physical error rates, logical error probabilities, their errors).
+        estimated_threshold: Estimated asymptotic threshold ``p_th``.
+        threshold_error: Statistical uncertainty on ``estimated_threshold``.
+    """
+
     history_data: dict[int, tuple[list[float], list[float], list[float]]]
     estimated_threshold: float
     threshold_error: float
+
 
 def plot(
     result: LambdaData | LEPPRData | ThresholdData,
@@ -63,7 +75,7 @@ def plot(
             threshold_data = ThresholdData(
                 history_data=threshold_dict,
                 estimated_threshold=0.01,
-                threshold_error=0.0005
+                threshold_error=0.0005,
             )
             fig, ax = plot(threshold_data)
 

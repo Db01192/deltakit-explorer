@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Callable
 
-import deltakit_stim  # type: ignore[import-untyped]
 import numpy as np
 from deltakit_circuit.gates import PauliBasis
 from deltakit_decode._mwpm_decoder import PyMatchingDecoder
@@ -15,7 +15,6 @@ from deltakit_explorer.codes import RotatedPlanarCode, css_code_memory_circuit
 from deltakit_explorer.enums import DecoderType
 from deltakit_explorer.qpu import QPU, SI1000Noise
 from deltakit_explorer.types import Decoder
-from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +53,13 @@ def finite_size_scaling_drift(d: float, p_th: float, C: float, omega: float) -> 
     Returns:
         The calculated physical error rate crossing point for the given distance.
     """
-    return p_th + C * (d ** -omega)
+    return p_th + C * (d**-omega)
+
 
 class ThresholdEstimator:
     """Estimates the quantum error correction threshold using bisection search.
 
-     Args:
+    Args:
         min_p: Minimum physical error probability to consider.
         max_p: Maximum physical error probability to consider.
         precision: Precision required for the threshold estimate.
@@ -67,7 +67,11 @@ class ThresholdEstimator:
         code_class: Quantum error correction code class to use.
         noise_model_class: Noise model class to use.
         decoder: Decoder to use. If None, MWPM is used.
+        experiment_builder: Callable building the experiment circuit from a code
+            and distance. If None, a Z-basis CSS memory circuit with ``distance``
+            rounds is used.
     """
+
     def __init__(
         self,
         min_p: float = 0.001,
@@ -89,7 +93,7 @@ class ThresholdEstimator:
             decoder if decoder is not None else Decoder(decoder_type=DecoderType.MWPM)
         )
         self.history_data = {}
-        
+
         # Default to the CSS memory circuit if no custom builder is provided
         self.experiment_builder = experiment_builder or (
             lambda code, distance: css_code_memory_circuit(
@@ -145,9 +149,6 @@ class ThresholdEstimator:
             d_low: The lower code distance value.
             d_high: The higher code distance value.
 
-        Raises:
-            NotImplementedError: If the simulation is not yet implemented.
-
         Returns:
             The estimated physical error rate at the threshold crossover point.
         """
@@ -183,9 +184,7 @@ class ThresholdEstimator:
 
                 current_shots = min(
                     MAX_SHOTS,
-                    math.ceil(
-                        current_shots * (combined_error / (SAFETY * gap)) ** 2
-                    )
+                    math.ceil(current_shots * (combined_error / (SAFETY * gap)) ** 2)
                     if gap > 0
                     else current_shots * 10,
                 )
@@ -199,14 +198,24 @@ class ThresholdEstimator:
             self.history_data[d_high][mid_p] = (lep_high, current_shots)
             logger.info(
                 "d=(%d, %d) p=%.6g: lep=%.4g vs %.4g (%d shots)",
-                d_low, d_high, mid_p, lep_low, lep_high, current_shots,
+                d_low,
+                d_high,
+                mid_p,
+                lep_low,
+                lep_high,
+                current_shots,
             )
 
             if gap <= combined_error:
                 logger.warning(
                     "d=(%d, %d): error bars still overlap at p=%.6g with %d shots; "
                     "stopping search at bracket [%.6g, %.6g].",
-                    d_low, d_high, mid_p, current_shots, current_min, current_max,
+                    d_low,
+                    d_high,
+                    mid_p,
+                    current_shots,
+                    current_min,
+                    current_max,
                 )
                 break
 
@@ -259,7 +268,9 @@ class ThresholdEstimator:
 
         return formatted_history
 
-    def estimate_asymptotic_threshold(self, distance_pairs: list[tuple[int, int]]) -> tuple[float, float, float, dict]:
+    def estimate_asymptotic_threshold(
+        self, distance_pairs: list[tuple[int, int]]
+    ) -> tuple[float, float, float, dict]:
         """Runs parallel searches and fits the data to find the asymptotic threshold.
 
         Args:
@@ -286,7 +297,7 @@ class ThresholdEstimator:
             np.array(average_distances),
             np.array(crossing_points),
             p0=initial_guess,
-            bounds=([0.0, -10.0, 0.1], [0.15, 10.0, 5.0])
+            bounds=([0.0, -10.0, 0.1], [0.15, 10.0, 5.0]),
         )
 
         p_th_final, _, omega_final = popt

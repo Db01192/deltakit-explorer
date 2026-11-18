@@ -9,13 +9,11 @@ from deltakit_explorer.qpu import ToyNoise
 
 
 class TestThresholdEstimator:
-
     def test_get_error_bar(self):
         """Test that the math for the standard error works correctly."""
         assert get_error_bar(0.0, 100) == 0.0
         expected_error = math.sqrt((0.5 * 0.5) / 100)
         assert math.isclose(get_error_bar(0.5, 100), expected_error)
-
 
     def test_estimator_initialisation(self):
         """Test that the estimator initialises correctly with default values."""
@@ -27,10 +25,9 @@ class TestThresholdEstimator:
         assert estimator.num_shots == 100_000
         assert estimator.history_data == {}
 
-
     @patch.object(ThresholdEstimator, "run_simulation")
     @pytest.mark.parametrize(
-         ("p_value", "distance"),
+        ("p_value", "distance"),
         [
             (0.01, 3),
             (0.05, 3),
@@ -38,13 +35,15 @@ class TestThresholdEstimator:
             (0.05, 5),
         ],
     )
-    def test_run_simulation(self, mock_run_simulation: Any, p_value: float, distance: int):
+    def test_run_simulation(
+        self, mock_run_simulation: Any, p_value: float, distance: int
+    ):
         """Test the simulation worker using mocked execution to bypass stim C++ type errors.
 
         Args:
-            mock_run_simulation (Any): The mock fixture for simulation execution.
-            p_value (float): The physical error probability.
-            distance (int): The code distance.
+            mock_run_simulation: The mock fixture for simulation execution.
+            p_value: The physical error probability.
+            distance: The code distance.
         """
         # Tell the mock to pretend the simulation successfully returned a logical error probability of 0.042
         mock_run_simulation.return_value = 0.042
@@ -56,13 +55,12 @@ class TestThresholdEstimator:
         assert 0.0 <= lep <= 1.0
         mock_run_simulation.assert_called_once()
 
-
     @patch.object(ThresholdEstimator, "run_parallel_searches")
-    def test_run_parallel_searches(self, mock_parallel):
+    def test_run_parallel_searches(self, mock_parallel: Any) -> None:
         """Test that multiple pairs are processed in parallel.
 
         Args:
-            mock_parallel (Any): The mock fixture for parallel search execution.
+            mock_parallel: The mock fixture for parallel search execution.
         """
         # Mock this as well to guarantee CI stability
         mock_parallel.return_value = {(3, 5): 0.015}

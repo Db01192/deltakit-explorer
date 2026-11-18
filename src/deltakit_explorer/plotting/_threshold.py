@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import logging
 
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
 from deltakit_explorer.enums._basic_enums import THRESHOLD_DISTANCE_COLORS
-
 
 logger = logging.getLogger(__name__)
 
