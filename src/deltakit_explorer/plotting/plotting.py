@@ -23,13 +23,15 @@ class ThresholdData:
     Attributes:
         history_data: Mapping from code distance to a tuple of
             (physical error rates, logical error probabilities, their errors).
-        estimated_threshold: Estimated asymptotic threshold ``p_th``.
-        threshold_error: Statistical uncertainty on ``estimated_threshold``.
+        crossing_points: Mapping from each (d_low, d_high) pair to the physical
+            error rate at which their logical error probabilities cross.
+        crossing_errors: Optional mapping from each (d_low, d_high) pair to the
+            uncertainty on its crossing point, drawn as a horizontal error bar.
     """
 
     history_data: dict[int, tuple[list[float], list[float], list[float]]]
-    estimated_threshold: float
-    threshold_error: float
+    crossing_points: dict[tuple[int, int], float]
+    crossing_errors: dict[tuple[int, int], float] | None = None
 
 
 def plot(
@@ -74,8 +76,7 @@ def plot(
 
             threshold_data = ThresholdData(
                 history_data=threshold_dict,
-                estimated_threshold=0.01,
-                threshold_error=0.0005,
+                crossing_points={(3, 5): 0.0038, (5, 7): 0.0041},
             )
             fig, ax = plot(threshold_data)
 
@@ -96,8 +97,8 @@ def plot(
         case ThresholdData():
             return plot_threshold(
                 data_dict=result.history_data,
-                estimated_threshold=result.estimated_threshold,
-                threshold_error=result.threshold_error,
+                crossing_points=result.crossing_points,
+                crossing_errors=result.crossing_errors,
                 fig=fig,
                 ax=ax,
                 title=title,

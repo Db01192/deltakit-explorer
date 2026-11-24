@@ -9,7 +9,6 @@ from collections.abc import Callable
 import numpy as np
 from deltakit_circuit.gates import PauliBasis
 from deltakit_decode._mwpm_decoder import PyMatchingDecoder
-from scipy.optimize import curve_fit
 
 from deltakit_explorer.codes import RotatedPlanarCode, css_code_memory_circuit
 from deltakit_explorer.enums import DecoderType
@@ -32,28 +31,6 @@ def get_error_bar(lep: float, num_shots: int) -> float:
     if math.isclose(lep, 0.0, abs_tol=1e-9):
         return 0.0
     return math.sqrt((lep * (1.0 - lep)) / num_shots)
-
-
-def finite_size_scaling_drift(d: float, p_th: float, C: float, omega: float) -> float:
-    """The physical drift equation for finite-size scaling.
-
-    p_cross(d) = p_th + C * d^(-omega)
-
-    Reference:
-    Wang, C., Harrington, J., & Preskill, J. (2003).
-    "Confinement-Higgs transition in a disordered gauge theory and the accuracy threshold for quantum memory."
-    arXiv:quant-ph/0207088v2
-
-    Args:
-        d: The code distance.
-        p_th: The asymptotic physical threshold error rate.
-        C: A scaling constant.
-        omega: The finite-size scaling exponent.
-
-    Returns:
-        The calculated physical error rate crossing point for the given distance.
-    """
-    return p_th + C * (d**-omega)
 
 
 class ThresholdEstimator:
@@ -93,6 +70,7 @@ class ThresholdEstimator:
             decoder if decoder is not None else Decoder(decoder_type=DecoderType.MWPM)
         )
         self.history_data = {}
+        self.crossing_brackets: dict[tuple[int, int], tuple[float, float]] = {}
 
         # Default to the CSS memory circuit if no custom builder is provided
         self.experiment_builder = experiment_builder or (
@@ -145,6 +123,14 @@ class ThresholdEstimator:
     def run_single_pair_search(self, d_low: int, d_high: int) -> float:
         """Performs a bisection search to find the threshold crossing for a code distance pair.
 
+        The final bracket is stored in ``crossing_brackets``. If the search
+        stops early because the two distances cannot be told apart at the
+        midpoint, the crossing is taken to be that midpoint, and the bracket is
+        narrowed to the p range over which the LEP gap would stay hidden by the
+        noise: ``mid_p +/- combined_error / slope``, where ``slope`` is the rate
+        of change of the gap estimated from the gaps measured at the two bracket
+        ends. It is never wider than the bracket itself.
+
         Args:
             d_low: The lower code distance value.
             d_high: The higher code distance value.
@@ -154,6 +140,10 @@ class ThresholdEstimator:
         """
         current_min = self.min_p
         current_max = self.max_p
+        # Signed gap (lep_low - lep_high) measured at each bracket end: positive
+        # below threshold, negative above. None until that end has been sampled.
+        gap_at_min: float | None = None
+        gap_at_max: float | None = None
         SAFETY = 0.8
         MAX_SHOTS = 1_000_000
 
@@ -217,33 +207,73 @@ class ThresholdEstimator:
                     current_min,
                     current_max,
                 )
-                break
+                half_width = (current_max - current_min) / 2.0
+                if gap_at_min is not None and gap_at_max is not None:
+                    slope = (gap_at_min - gap_at_max) / (current_max - current_min)
+                    if slope > 0:
+                        half_width = min(half_width, combined_error / slope)
+                self.crossing_brackets[(d_low, d_high)] = (
+                    mid_p - half_width,
+                    mid_p + half_width,
+                )
+                return mid_p
 
             if lep_low > lep_high:
                 current_min = mid_p
+                gap_at_min = lep_low - lep_high
             elif lep_low < lep_high:
                 current_max = mid_p
+                gap_at_max = lep_low - lep_high
             elif lep_low == lep_high:
                 break
 
+        self.crossing_brackets[(d_low, d_high)] = (current_min, current_max)
         return (current_min + current_max) / 2.0
 
-    def run_parallel_searches(self, distance_pairs: list[tuple[int, int]]) -> dict:
-        """Executes bisection searches for each distance pair, one after another.
+    def estimate_crossing_points(
+        self, distance_pairs: list[tuple[int, int]]
+    ) -> dict[tuple[int, int], float]:
+        """Finds the threshold crossing point for each pair of code distances.
 
-        The searches run sequentially: the simulations are CPU-bound and hold the
-        GIL, so threads gave no speed-up, and concurrent first calls into the
-        deltakit_stim extension could deadlock.
+        Each pair is searched independently by bisection; the searches run one
+        after another (the simulations are CPU-bound and hold the GIL, and
+        concurrent first calls into the deltakit_stim extension could deadlock).
+
+        No extrapolation to an asymptotic threshold is attempted: with only a
+        few pairs, a finite-size-scaling fit is underdetermined. The crossing
+        points themselves are finite-size estimates of the threshold.
 
         Args:
             distance_pairs: A list of tuples containing lower and upper code distances.
 
         Returns:
-            A dictionary mapping each distance pair to its respective threshold estimate.
+            A dictionary mapping each distance pair to the physical error rate
+            at which their logical error probabilities cross.
         """
         return {
             (d_low, d_high): self.run_single_pair_search(d_low, d_high)
             for d_low, d_high in distance_pairs
+        }
+
+    def get_crossing_uncertainties(self) -> dict[tuple[int, int], float]:
+        """Returns the bisection uncertainty of each crossing point found so far.
+
+        The uncertainty is half the width of the final bracket. When the search
+        converges, that is at most ``precision / 2``. When it stops early
+        because the two distances cannot be told apart, it is the p range over
+        which the LEP gap stays below the combined error bars, estimated from
+        the gap's slope across the bracket (see ``run_single_pair_search``).
+        Either way it is an estimate of the search's resolution, not a rigorous
+        confidence interval: a bisection step decided on a statistical
+        fluctuation can leave the true crossing outside the bracket.
+
+        Returns:
+            A dictionary mapping each searched (d_low, d_high) pair to the
+            half-width of its final bisection bracket.
+        """
+        return {
+            pair: (p_max - p_min) / 2.0
+            for pair, (p_min, p_max) in self.crossing_brackets.items()
         }
 
     def get_search_history(self) -> dict:
@@ -267,40 +297,3 @@ class ThresholdEstimator:
             formatted_history[d] = (p_vals, lep_vals, lep_errors)
 
         return formatted_history
-
-    def estimate_asymptotic_threshold(
-        self, distance_pairs: list[tuple[int, int]]
-    ) -> tuple[float, float, float, dict]:
-        """Runs parallel searches and fits the data to find the asymptotic threshold.
-
-        Args:
-            distance_pairs: A list of tuples containing lower and upper code distances.
-
-        Returns:
-            A tuple containing (p_th_final, p_th_error, omega_final, raw_results_dict).
-        """
-        results = self.run_parallel_searches(distance_pairs)
-
-        average_distances: list[float] = []
-        crossing_points: list[float] = []
-
-        for pair, p_cross in sorted(results.items()):
-            d_low, d_high = pair
-            average_distances.append((d_low + d_high) / 2.0)
-            crossing_points.append(p_cross)
-
-        # Initial guesses: [p_th, C, omega]
-        initial_guess = [0.01, 0.01, 1.0]
-
-        popt, pcov = curve_fit(
-            finite_size_scaling_drift,
-            np.array(average_distances),
-            np.array(crossing_points),
-            p0=initial_guess,
-            bounds=([0.0, -10.0, 0.1], [0.15, 10.0, 5.0]),
-        )
-
-        p_th_final, _, omega_final = popt
-        p_th_error = float(np.sqrt(np.diag(pcov))[0])
-
-        return p_th_final, p_th_error, omega_final, results

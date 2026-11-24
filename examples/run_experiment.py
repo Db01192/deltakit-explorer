@@ -1,6 +1,7 @@
 import logging
 
 from deltakit_explorer.analysis.threshold import ThresholdEstimator
+
 # Import the central dispatcher instead of the specific threshold plot
 from deltakit_explorer.plotting import plot
 from deltakit_explorer.plotting.plotting import ThresholdData
@@ -16,31 +17,33 @@ def run_experiment() -> None:
     estimator = ThresholdEstimator(max_p=0.01)
     distance_pairs = [(3, 5), (5, 7), (7, 9)]
 
-    logger.info("Running bisection searches and calculating asymptotic threshold...")
+    logger.info("Running bisection searches for each distance pair...")
 
-    p_th_final, p_th_error, omega_final, results = estimator.estimate_asymptotic_threshold(distance_pairs)
+    crossing_points = estimator.estimate_crossing_points(distance_pairs)
+    crossing_errors = estimator.get_crossing_uncertainties()
 
-    logger.info("--- Pairwise Pseudothreshold Results ---")
-    for pair, p_cross in sorted(results.items()):
-        d_avg = sum(pair) / 2.0
-        logger.info("Pair d=%s (Avg d=%s): p_cross = %.5f", pair, d_avg, p_cross)
+    logger.info("--- Pairwise Crossing Points ---")
+    for (d_low, d_high), p_cross in sorted(crossing_points.items()):
+        logger.info(
+            "d = (%d, %d): p_cross = %.2e ± %.0e",
+            d_low,
+            d_high,
+            p_cross,
+            crossing_errors[(d_low, d_high)],
+        )
 
-    logger.info("--- Final Results ---")
-    logger.info("True Asymptotic Threshold (p_th): %.5f +/- %.5f", p_th_final, p_th_error)
-    logger.info("Extracted Scaling Exponent (omega): %.3f", omega_final)
+    logger.info("Generating threshold graph...")
 
-    logger.info("Generating threshold graph with the new asymptotic p_th...")
-
-    fig, ax = plot(
+    fig, _ = plot(
         ThresholdData(
             history_data=estimator.get_search_history(),
-            estimated_threshold=p_th_final,
-            threshold_error=p_th_error,
+            crossing_points=crossing_points,
+            crossing_errors=crossing_errors,
         )
     )
 
     output_filename = "threshold_plot.png"
-    fig.savefig(output_filename, dpi=300, bbox_inches="tight")
+    fig.savefig(output_filename, dpi=300, bbox_inches="tight", facecolor="white")
     logger.info("Saved threshold plot to %s", output_filename)
 
 if __name__ == "__main__":
